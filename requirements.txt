@@ -1,0 +1,3 @@
+pydantic~=2.10.0
+datamodel-code-generator~=0.28.5
+jsonref~=1.1.0
