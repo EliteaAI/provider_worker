@@ -211,7 +211,6 @@ class Toolkit:  # pylint: disable=R0902,R0903
                     description=tool_obj["description"],
                     args_schema=self._compile_args_schema(tool_name, tool_obj["args_schema"]),
                     func=functools.partial(self._run_tool, tool_name),
-                    handle_tool_error=True,
                     metadata={
                         "toolkit_name": self.original_toolkit_name,
                     },
