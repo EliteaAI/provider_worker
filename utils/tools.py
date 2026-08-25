@@ -50,6 +50,12 @@ from pylon.core.tools import log  # pylint: disable=E0611,E0401,W0611
 
 from tools import context, this, worker_core  # pylint: disable=E0611,E0401
 
+try:
+    from .failure_signals import TERMINAL_STATUSES, detect_provider_failure
+except ImportError:  # loaded standalone via spec_from_file_location, e.g. in tests
+    sys.path.insert(0, __file__.rsplit("/", 1)[0])
+    from failure_signals import TERMINAL_STATUSES, detect_provider_failure  # pylint: disable=E0401
+
 
 # Media types that have artifacts pre-created by provider plugins
 # These objects contain filepath (/{bucket}/{filename}) instead of raw data
@@ -377,6 +383,7 @@ class Toolkit:  # pylint: disable=R0902,R0903
         #
         # Invoke
         #
+        invocation_id = None  # only ever set on the async path; kept defined for the shadow-detector log below
         if self.tool_info[tool_name]["async_invocation_supported"]:
             log.info("Invoking in async mode")
             #
@@ -427,9 +434,9 @@ class Toolkit:  # pylint: disable=R0902,R0903
                 #
                 worker_core.event_node.emit("provider_invocation_started", invocation_event)
                 #
-                while async_response.status not in [
-                        self.api_models.Status.Completed, self.api_models.Status.Error,
-                ]:
+                # Value-based, not an enum-member list: provider_worker and pylon_main ship
+                # independently, so a schema-version mismatch must never AttributeError here.
+                while getattr(async_response.status, "value", async_response.status) not in TERMINAL_STATUSES:
                     time.sleep(self.async_wait_interval)
                     #
                     async_response = self.api_client.get_tool_invocation_status(
@@ -482,6 +489,30 @@ class Toolkit:  # pylint: disable=R0902,R0903
         # Process response
         #
         log.info("Final response: %s", response)
+        #
+        # Shadow-mode only: read-only, never returns/raises/mutates response (see #6168).
+        response_status = getattr(getattr(response, "status", None), "value", getattr(response, "status", None))
+        shadow_failure = detect_provider_failure(response_status, getattr(response, "error_category", None))
+        if shadow_failure is not None:
+            log.warning(
+                "TOOL_FAILURE_SHADOW %s",
+                json.dumps({
+                    "detected_by": "provider_status",
+                    "would_be_error_class": shadow_failure["would_be_error_class"],
+                    "provider_name": self.provider_name,
+                    "toolkit_name": self.original_toolkit_name,
+                    "toolkit_type": None,
+                    "toolkit_id": None,
+                    "tool_name": tool_name,
+                    "error_category": shadow_failure["error_category"],
+                    "error_type": getattr(response, "error_type", None),
+                    "invocation_id": invocation_id,
+                    "project_id": getattr(self, "_project_id", None),
+                    "user_id": getattr(self, "_user_id", None),
+                    "result_len": len(str(getattr(response, "result", ""))),
+                    "delivered_as_success": True,
+                }),
+            )
         #
         try:
             final_result = str(response.result)
@@ -1130,6 +1161,14 @@ class OpenAPIClient:  # pylint: disable=R0903
                 #
                 return response_value
             except Exception as exc:
+                # Diagnostic only -- type/message below are unchanged so callers keep behaving
+                # exactly as before (e.g. an out-of-enum status still surfaces as this ValueError).
+                log.error(
+                    "Invalid response for model %s, http_status=%s: %s",
+                    getattr(response_model, "__name__", response_model),
+                    response.status_code,
+                    repr(exc)[:500],
+                )
                 raise ValueError("Invalid response") from exc
             #
             return None
