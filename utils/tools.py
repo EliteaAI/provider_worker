@@ -79,6 +79,10 @@ class Toolkit:  # pylint: disable=R0902,R0903
         self.elitea = elitea
         self.provider_name = provider
         self.llm = kwargs["llm"] if "llm" in kwargs else None
+        # From the tool config's own 'id'/'type', not toolkit_configuration; absent when
+        # called by an older SDK that doesn't forward them yet (see #6168).
+        self.toolkit_id = kwargs.pop("id", None)
+        self.toolkit_type = kwargs.pop("type", None)
         #
         self.api_info = self._get_provider_api_info(provider)
         if self.api_info is None:
@@ -219,6 +223,8 @@ class Toolkit:  # pylint: disable=R0902,R0903
                     func=functools.partial(self._run_tool, tool_name),
                     metadata={
                         "toolkit_name": self.original_toolkit_name,
+                        "toolkit_id": self.toolkit_id,
+                        "toolkit_type": self.toolkit_type,
                     },
                 )
             )
@@ -491,20 +497,28 @@ class Toolkit:  # pylint: disable=R0902,R0903
         log.info("Final response: %s", response)
         #
         # Shadow-mode only: read-only, never returns/raises/mutates response (see #6168).
+        # Signal ladder, cheapest first: status -> declared errors/warnings -> error_category.
         response_status = getattr(getattr(response, "status", None), "value", getattr(response, "status", None))
-        shadow_failure = detect_provider_failure(response_status, getattr(response, "error_category", None))
-        if shadow_failure is not None:
+        response_error_category = getattr(response, "error_category", None)
+        shadow_failure = detect_provider_failure(response_status, response_error_category)
+        detected_by = "provider_status" if shadow_failure is not None else None
+        if detected_by is None:
+            if getattr(response, "errors", None):
+                detected_by = "provider_declared_errors"
+            elif getattr(response, "warnings", None):
+                detected_by = "provider_declared_warnings"
+        if detected_by is not None:
             log.warning(
                 "TOOL_FAILURE_SHADOW %s",
                 json.dumps({
-                    "detected_by": "provider_status",
-                    "would_be_error_class": shadow_failure["would_be_error_class"],
+                    "detected_by": detected_by,
+                    "would_be_error_class": shadow_failure["would_be_error_class"] if shadow_failure else None,
                     "provider_name": self.provider_name,
                     "toolkit_name": self.original_toolkit_name,
-                    "toolkit_type": None,
-                    "toolkit_id": None,
+                    "toolkit_type": getattr(self, "toolkit_type", None),
+                    "toolkit_id": getattr(self, "toolkit_id", None),
                     "tool_name": tool_name,
-                    "error_category": shadow_failure["error_category"],
+                    "error_category": shadow_failure["error_category"] if shadow_failure else response_error_category,
                     "error_type": getattr(response, "error_type", None),
                     "invocation_id": invocation_id,
                     "project_id": getattr(self, "_project_id", None),

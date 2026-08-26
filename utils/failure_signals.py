@@ -27,6 +27,7 @@ PROVIDER_CATEGORY_CLASSES = {
     "artifact_error": "infrastructure",
     "invalid_input": "input",
     "input_error": "input",
+    "resource_not_found": "input",
     "branch_not_found": "input",
     "repository_not_found": "input",
     "empty_repository": "input",

@@ -55,6 +55,7 @@ def test_non_failure_statuses_return_none(failure_signals, status):
         ("artifact_error", "infrastructure"),
         ("invalid_input", "input"),
         ("input_error", "input"),
+        ("resource_not_found", "input"),
         ("branch_not_found", "input"),
         ("repository_not_found", "input"),
         ("empty_repository", "input"),
@@ -71,7 +72,7 @@ def test_full_published_table(failure_signals, status, category, expected_class)
 
 
 @pytest.mark.parametrize("status", ["Error", "Failed"])
-@pytest.mark.parametrize("category", ["resource_not_found", "unknown_error", "totally_unmapped_category"])
+@pytest.mark.parametrize("category", ["unknown_error", "totally_unmapped_category"])
 def test_unmapped_category_returns_none_class_but_preserves_raw_category(failure_signals, status, category):
     result = failure_signals.detect_provider_failure(status, category)
     assert result == {"error_category": category, "would_be_error_class": None}
