@@ -81,3 +81,12 @@ def test_unmapped_category_returns_none_class_but_preserves_raw_category(failure
 def test_failure_without_category(failure_signals):
     result = failure_signals.detect_provider_failure("Error", None)
     assert result == {"error_category": None, "would_be_error_class": None}
+
+
+def test_classify_category_matches_detect_provider_failure_table(failure_signals):
+    """classify_category is status-independent so rung 2 (declared errors/warnings on a
+    Completed response) can still classify a known category (2nd review)."""
+    for category, expected_class in failure_signals.PROVIDER_CATEGORY_CLASSES.items():
+        assert failure_signals.classify_category(category) == expected_class
+    assert failure_signals.classify_category("unknown_error") is None
+    assert failure_signals.classify_category(None) is None

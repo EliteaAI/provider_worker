@@ -51,10 +51,10 @@ from pylon.core.tools import log  # pylint: disable=E0611,E0401,W0611
 from tools import context, this, worker_core  # pylint: disable=E0611,E0401
 
 try:
-    from .failure_signals import TERMINAL_STATUSES, detect_provider_failure
+    from .failure_signals import TERMINAL_STATUSES, classify_category, detect_provider_failure
 except ImportError:  # loaded standalone via spec_from_file_location, e.g. in tests
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
-    from failure_signals import TERMINAL_STATUSES, detect_provider_failure  # pylint: disable=E0401
+    from failure_signals import TERMINAL_STATUSES, classify_category, detect_provider_failure  # pylint: disable=E0401
 
 
 # Media types that have artifacts pre-created by provider plugins
@@ -508,11 +508,17 @@ class Toolkit:  # pylint: disable=R0902,R0903
             elif getattr(response, "warnings", None):
                 detected_by = "provider_declared_warnings"
         if detected_by is not None:
+            # Rung 2 (declared errors/warnings) has no `shadow_failure` (status isn't a
+            # failure status), but a Completed response can still carry a known
+            # error_category — classify it the same way rung 1 does (#6168 review).
+            would_be_error_class = (
+                shadow_failure["would_be_error_class"] if shadow_failure else classify_category(response_error_category)
+            )
             log.warning(
                 "TOOL_FAILURE_SHADOW %s",
                 json.dumps({
                     "detected_by": detected_by,
-                    "would_be_error_class": shadow_failure["would_be_error_class"] if shadow_failure else None,
+                    "would_be_error_class": would_be_error_class,
                     "provider_name": self.provider_name,
                     "toolkit_name": self.original_toolkit_name,
                     "toolkit_type": getattr(self, "toolkit_type", None),

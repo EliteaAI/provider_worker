@@ -191,6 +191,27 @@ def test_shadow_log_fires_on_declared_errors_despite_completed_status(provider_t
     assert payload["would_be_error_class"] is None
 
 
+def test_shadow_log_declared_errors_classifies_known_category(provider_tools):
+    """2nd review: Completed + errors + a known error_category must not lose the
+    classification the table already has for it (previously hardcoded to None)."""
+    response = FakeResponse(
+        "Completed", "plain text", error_category="timeout", errors=["upstream timed out"]
+    )
+    toolkit = _build_toolkit(provider_tools, "t", {}, response)
+
+    toolkit._run_tool("t")
+
+    payload = json.loads(
+        next(
+            call for call in provider_tools.log.warning.call_args_list
+            if "TOOL_FAILURE_SHADOW" in str(call.args[0])
+        ).args[1]
+    )
+    assert payload["detected_by"] == "provider_declared_errors"
+    assert payload["error_category"] == "timeout"
+    assert payload["would_be_error_class"] == "infrastructure"
+
+
 def test_shadow_log_fires_on_declared_warnings_when_no_errors(provider_tools):
     """Rung 2, warnings variant: only checked when errors is empty/absent."""
     response = FakeResponse("Completed", "plain text", warnings=["result may be truncated"])

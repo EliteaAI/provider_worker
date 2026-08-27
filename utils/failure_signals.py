@@ -39,6 +39,15 @@ PROVIDER_CATEGORY_CLASSES = {
 }
 
 
+def classify_category(error_category: Optional[str]) -> Optional[str]:
+    """Map an error_category to its would-be ToolErrorClass, or None if unmapped.
+
+    Independent of invocation status: also used by the declared-errors/warnings
+    rung (a Completed response can still carry a known error_category).
+    """
+    return PROVIDER_CATEGORY_CLASSES.get(error_category)
+
+
 def detect_provider_failure(status: Optional[str], error_category: Optional[str]) -> Optional[dict]:
     """Return shadow payload fields for a failed provider invocation, or None.
 
@@ -51,5 +60,5 @@ def detect_provider_failure(status: Optional[str], error_category: Optional[str]
         return None
     return {
         "error_category": error_category,
-        "would_be_error_class": PROVIDER_CATEGORY_CLASSES.get(error_category),
+        "would_be_error_class": classify_category(error_category),
     }
