@@ -52,9 +52,11 @@ from tools import context, this, worker_core  # pylint: disable=E0611,E0401
 
 try:
     from .failure_signals import TERMINAL_STATUSES, classify_category, detect_provider_failure
+    from .budget_errors import budget_error_from_provider_response
 except ImportError:  # loaded standalone via spec_from_file_location, e.g. in tests
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
     from failure_signals import TERMINAL_STATUSES, classify_category, detect_provider_failure  # pylint: disable=E0401
+    from budget_errors import budget_error_from_provider_response  # pylint: disable=E0401
 
 
 # Media types that have artifacts pre-created by provider plugins
@@ -533,6 +535,10 @@ class Toolkit:  # pylint: disable=R0902,R0903
                     "delivered_as_success": True,
                 }),
             )
+        #
+        budget_error = budget_error_from_provider_response(response)
+        if budget_error is not None:
+            raise budget_error
         #
         try:
             final_result = str(response.result)
