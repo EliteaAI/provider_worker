@@ -50,7 +50,13 @@ from pylon.core.tools import log  # pylint: disable=E0611,E0401,W0611
 
 from tools import context, this, worker_core  # pylint: disable=E0611,E0401
 
-from .budget_errors import budget_error_from_provider_response
+try:
+    from .failure_signals import TERMINAL_STATUSES, classify_category, detect_provider_failure
+    from .budget_errors import budget_error_from_provider_response
+except ImportError:  # loaded standalone via spec_from_file_location, e.g. in tests
+    sys.path.insert(0, __file__.rsplit("/", 1)[0])
+    from failure_signals import TERMINAL_STATUSES, classify_category, detect_provider_failure  # pylint: disable=E0401
+    from budget_errors import budget_error_from_provider_response  # pylint: disable=E0401
 
 
 # Media types that have artifacts pre-created by provider plugins
@@ -75,6 +81,10 @@ class Toolkit:  # pylint: disable=R0902,R0903
         self.elitea = elitea
         self.provider_name = provider
         self.llm = kwargs["llm"] if "llm" in kwargs else None
+        # From the tool config's own 'id'/'type', not toolkit_configuration; absent when
+        # called by an older SDK that doesn't forward them yet (see #6168).
+        self.toolkit_id = kwargs.pop("id", None)
+        self.toolkit_type = kwargs.pop("type", None)
         #
         self.api_info = self._get_provider_api_info(provider)
         if self.api_info is None:
@@ -215,6 +225,8 @@ class Toolkit:  # pylint: disable=R0902,R0903
                     func=functools.partial(self._run_tool, tool_name),
                     metadata={
                         "toolkit_name": self.original_toolkit_name,
+                        "toolkit_id": self.toolkit_id,
+                        "toolkit_type": self.toolkit_type,
                     },
                 )
             )
@@ -379,6 +391,7 @@ class Toolkit:  # pylint: disable=R0902,R0903
         #
         # Invoke
         #
+        invocation_id = None  # only ever set on the async path; kept defined for the shadow-detector log below
         if self.tool_info[tool_name]["async_invocation_supported"]:
             log.info("Invoking in async mode")
             #
@@ -429,9 +442,9 @@ class Toolkit:  # pylint: disable=R0902,R0903
                 #
                 worker_core.event_node.emit("provider_invocation_started", invocation_event)
                 #
-                while async_response.status not in [
-                        self.api_models.Status.Completed, self.api_models.Status.Error,
-                ]:
+                # Value-based, not an enum-member list: provider_worker and pylon_main ship
+                # independently, so a schema-version mismatch must never AttributeError here.
+                while getattr(async_response.status, "value", async_response.status) not in TERMINAL_STATUSES:
                     time.sleep(self.async_wait_interval)
                     #
                     async_response = self.api_client.get_tool_invocation_status(
@@ -484,6 +497,45 @@ class Toolkit:  # pylint: disable=R0902,R0903
         # Process response
         #
         log.info("Final response: %s", response)
+        #
+        # Shadow-mode only: read-only, never returns/raises/mutates response (see #6168).
+        # Signal ladder, cheapest first: status -> declared errors/warnings -> error_category.
+        response_status = getattr(getattr(response, "status", None), "value", getattr(response, "status", None))
+        response_error_category = getattr(response, "error_category", None)
+        shadow_failure = detect_provider_failure(response_status, response_error_category)
+        detected_by = "provider_status" if shadow_failure is not None else None
+        if detected_by is None:
+            if getattr(response, "errors", None):
+                detected_by = "provider_declared_errors"
+            elif getattr(response, "warnings", None):
+                detected_by = "provider_declared_warnings"
+        if detected_by is not None:
+            # Rung 2 (declared errors/warnings) has no `shadow_failure` (status isn't a
+            # failure status), but a Completed response can still carry a known
+            # error_category — classify it the same way rung 1 does (#6168 review).
+            would_be_error_class = (
+                shadow_failure["would_be_error_class"] if shadow_failure else classify_category(response_error_category)
+            )
+            log.warning(
+                "TOOL_FAILURE_SHADOW %s",
+                json.dumps({
+                    "detected_by": detected_by,
+                    "would_be_error_class": would_be_error_class,
+                    "provider_name": self.provider_name,
+                    "toolkit_name": self.original_toolkit_name,
+                    "toolkit_type": getattr(self, "toolkit_type", None),
+                    "toolkit_id": getattr(self, "toolkit_id", None),
+                    "tool_name": tool_name,
+                    "error_category": shadow_failure["error_category"] if shadow_failure else response_error_category,
+                    "error_type": getattr(response, "error_type", None),
+                    "invocation_id": invocation_id,
+                    "project_id": getattr(self, "_project_id", None),
+                    "user_id": getattr(self, "_user_id", None),
+                    "result_len": len(str(getattr(response, "result", ""))),
+                    "delivered_as_success": True,
+                }),
+            )
+        #
         budget_error = budget_error_from_provider_response(response)
         if budget_error is not None:
             raise budget_error
@@ -1135,6 +1187,14 @@ class OpenAPIClient:  # pylint: disable=R0903
                 #
                 return response_value
             except Exception as exc:
+                # Diagnostic only -- type/message below are unchanged so callers keep behaving
+                # exactly as before (e.g. an out-of-enum status still surfaces as this ValueError).
+                log.error(
+                    "Invalid response for model %s, http_status=%s: %s",
+                    getattr(response_model, "__name__", response_model),
+                    response.status_code,
+                    repr(exc)[:500],
+                )
                 raise ValueError("Invalid response") from exc
             #
             return None
