@@ -1,4 +1,8 @@
-"""#6168 guard: the shadow failure detector must never change control flow.
+"""#6168 guard: detection must not change control flow on the rungs it does not enforce.
+
+Since #6401 a failure *status* does raise, so the Error/Failed composition cases live in
+test_6401_provider_failure_raises.py. What stays here: Completed responses return
+unchanged, the declared-errors/warnings rungs never raise, and the shadow-log payload.
 
 Reuses the `_load_provider_tools` harness from test_5854_dependency_contract.py
 (stubs pylon.core.tools / arbiter / tools, loads utils/tools.py by spec).
@@ -12,6 +16,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from langchain_core.tools import ToolException
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(Path(__file__).parent))
@@ -63,23 +68,21 @@ def _build_toolkit(provider_tools, tool_name, tool_metadata, response, toolkit_i
     return toolkit
 
 
-@pytest.mark.parametrize("status", ["Completed", "Error", "Failed"])
-def test_json_object_composition_unchanged(provider_tools, status):
-    response = FakeResponse(status, json.dumps({"result": "hello", "message": ""}), error_category="timeout")
+def test_json_object_composition_unchanged(provider_tools):
+    response = FakeResponse("Completed", json.dumps({"result": "hello", "message": ""}), error_category="timeout")
     toolkit = _build_toolkit(provider_tools, "t", {"result_composition": "json_object"}, response)
     assert toolkit._run_tool("t") == "hello"
 
 
-@pytest.mark.parametrize("status", ["Completed", "Error", "Failed"])
-def test_default_composition_unchanged(provider_tools, status):
-    response = FakeResponse(status, "plain text result", error_category="runtime_error")
+def test_default_composition_unchanged(provider_tools):
+    response = FakeResponse("Completed", "plain text result", error_category="runtime_error")
     toolkit = _build_toolkit(provider_tools, "t", {}, response)
     assert toolkit._run_tool("t") == "plain text result"
 
 
-@pytest.mark.parametrize("status", ["Completed", "Error", "Failed"])
-def test_list_of_objects_file_modified_ordering_unchanged(provider_tools, status, monkeypatch):
-    """Two image objects must still dispatch file_modified, in the same order, for every status."""
+def test_list_of_objects_file_modified_ordering_unchanged(provider_tools, monkeypatch):
+    """Two image objects must dispatch file_modified, in order. Failing statuses do the
+    same before raising - see test_6401_provider_failure_raises.py."""
     dispatched = Mock()
     monkeypatch.setattr(provider_tools, "dispatch_custom_event", dispatched)
 
@@ -87,7 +90,7 @@ def test_list_of_objects_file_modified_ordering_unchanged(provider_tools, status
         {"object_type": "image", "filepath": "/bucket/first.png", "meta": {}},
         {"object_type": "image", "filepath": "/bucket/second.png", "meta": {}},
     ]
-    response = FakeResponse(status, json.dumps(result_data), error_category="artifact_error")
+    response = FakeResponse("Completed", json.dumps(result_data), error_category="artifact_error")
     tool_metadata = {
         "result_composition": "list_of_objects",
         "result_objects": [{"object_type": "image"}],
@@ -114,13 +117,13 @@ def test_shadow_log_fires_only_for_failure_statuses(provider_tools):
 
 
 @pytest.mark.parametrize("status", ["Error", "Failed"])
-def test_shadow_log_fires_for_failure_statuses_without_changing_return_value(provider_tools, status):
+def test_shadow_log_fires_for_failure_statuses(provider_tools, status):
     response = FakeResponse(status, "plain text", error_category="timeout")
     toolkit = _build_toolkit(provider_tools, "t", {}, response)
 
-    result = toolkit._run_tool("t")
+    with pytest.raises(ToolException):
+        toolkit._run_tool("t")
 
-    assert result == "plain text"
     shadow_calls = [
         call for call in provider_tools.log.warning.call_args_list
         if "TOOL_FAILURE_SHADOW" in str(call.args[0])
@@ -129,7 +132,8 @@ def test_shadow_log_fires_for_failure_statuses_without_changing_return_value(pro
     payload = json.loads(shadow_calls[0].args[1])
     assert payload["would_be_error_class"] == "infrastructure"
     assert payload["error_category"] == "timeout"
-    assert payload["delivered_as_success"] is True
+    # This rung is enforced by a raise since #6401.
+    assert payload["delivered_as_success"] is False
 
 
 @pytest.mark.parametrize("status", ["Error", "Failed"])
@@ -140,7 +144,8 @@ def test_shadow_log_carries_toolkit_attribution_when_present(provider_tools, sta
         provider_tools, "t", {}, response, toolkit_id=42, toolkit_type="search_provider"
     )
 
-    toolkit._run_tool("t")
+    with pytest.raises(ToolException):
+        toolkit._run_tool("t")
 
     payload = json.loads(
         next(
@@ -160,7 +165,8 @@ def test_shadow_log_toolkit_attribution_defaults_to_none_when_absent(provider_to
     del toolkit.toolkit_id
     del toolkit.toolkit_type
 
-    toolkit._run_tool("t")
+    with pytest.raises(ToolException):
+        toolkit._run_tool("t")
 
     payload = json.loads(
         next(
@@ -234,7 +240,8 @@ def test_shadow_log_status_rung_takes_priority_over_errors_rung(provider_tools):
     response = FakeResponse("Error", "plain text", error_category="timeout", errors=["timed out"])
     toolkit = _build_toolkit(provider_tools, "t", {}, response)
 
-    toolkit._run_tool("t")
+    with pytest.raises(ToolException):
+        toolkit._run_tool("t")
 
     shadow_calls = [
         call for call in provider_tools.log.warning.call_args_list

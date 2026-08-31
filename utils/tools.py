@@ -532,7 +532,8 @@ class Toolkit:  # pylint: disable=R0902,R0903
                     "project_id": getattr(self, "_project_id", None),
                     "user_id": getattr(self, "_user_id", None),
                     "result_len": len(str(getattr(response, "result", ""))),
-                    "delivered_as_success": True,
+                    # Only rung 1 (a failure status) is enforced by a raise below (#6401).
+                    "delivered_as_success": shadow_failure is None,
                 }),
             )
         #
@@ -540,6 +541,42 @@ class Toolkit:  # pylint: disable=R0902,R0903
         if budget_error is not None:
             raise budget_error
         #
+        # Composition runs first even for a failing response: it is what dispatches the
+        # media file_modified events, and a raise above it would drop them (#6401).
+        composition_error = None
+        result_value = None
+        try:
+            result_value = self._compose_tool_result(response, tool_name)
+        except ToolException as exc:
+            composition_error = exc
+        #
+        if shadow_failure is not None:
+            raise self._provider_failure_exception(response, tool_name, shadow_failure, result_value)
+        #
+        if composition_error is not None:
+            raise composition_error
+        #
+        return result_value
+
+    def _provider_failure_exception(self, response, tool_name, shadow_failure, result_value=None):
+        """ Carry the provider's category as plain attributes, so this plugin needs no elitea_sdk import """
+        # Providers that report the reason in `result` rather than message/details would
+        # otherwise raise a message with nothing in it for the model to act on.
+        details = self._response_error_details(response).strip(" :") or str(result_value or "")
+        exc = ToolException(f"{tool_name} failed: {details}")
+        exc.provider_error_category = shadow_failure["error_category"]
+        exc.provider_error_type = getattr(response, "error_type", None)
+        return exc
+
+    @staticmethod
+    def _response_error_details(response):
+        try:
+            return f"{str(response.message)}: {str(response.details)}"
+        except:  # pylint: disable=W0702
+            return str(getattr(response, "message", ""))
+
+    def _compose_tool_result(self, response, tool_name):
+        """ Turn a provider response into the tool's return value """
         try:
             final_result = str(response.result)
             #
@@ -581,12 +618,7 @@ class Toolkit:  # pylint: disable=R0902,R0903
             #
             return final_result
         except Exception as exc:  # pylint: disable=W0702
-            try:
-                error_details = f"{str(response.message)}: {str(response.details)}"
-            except:  # pylint: disable=W0702
-                error_details = str(response.message)
-            #
-            raise ToolException(error_details) from exc
+            raise ToolException(self._response_error_details(response)) from exc
 
     def _process_list_of_objects_result(self, final_result, tool_metadata, tool_name):
         """ Process list_of_objects result composition type """

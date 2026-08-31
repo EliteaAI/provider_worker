@@ -24,6 +24,8 @@ from unittest.mock import Mock
 import pydantic
 import pytest
 
+pytest.importorskip("datamodel_code_generator")
+
 PLUGIN_ROOT = Path(__file__).parents[1]
 
 SPI_SCHEMA_DEFS = {
