@@ -6,12 +6,35 @@ import sys
 import types
 from unittest.mock import Mock
 
+import pytest
 from langchain_core.tools import StructuredTool
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 
 
+def _stub_codegen_if_missing(monkeypatch):
+    """datamodel-code-generator is an indexer-image dep; stub it so tests that never
+    reach _compile_args_schema can still import utils/tools.py without it."""
+    try:
+        import datamodel_code_generator  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    for name in (
+        "datamodel_code_generator",
+        "datamodel_code_generator.model",
+        "datamodel_code_generator.parser",
+        "datamodel_code_generator.parser.openapi",
+        "datamodel_code_generator.parser.jsonschema",
+    ):
+        stub = types.ModuleType(name)
+        stub.__getattr__ = lambda attr: Mock(name=attr)
+        monkeypatch.setitem(sys.modules, name, stub)
+
+
 def _load_provider_tools(monkeypatch):
+    _stub_codegen_if_missing(monkeypatch)
     pylon = types.ModuleType("pylon")
     pylon_core = types.ModuleType("pylon.core")
     pylon_tools = types.ModuleType("pylon.core.tools")
@@ -44,6 +67,7 @@ def _load_provider_tools(monkeypatch):
 
 def test_generated_pydantic_schema_is_accepted_by_structured_tool(monkeypatch):
     """The provider's generated Pydantic model must remain a valid tool schema."""
+    pytest.importorskip("datamodel_code_generator")
 
     provider_tools = _load_provider_tools(monkeypatch)
     toolkit = provider_tools.Toolkit.__new__(provider_tools.Toolkit)
