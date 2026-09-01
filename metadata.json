@@ -1,6 +1,6 @@
 {
   "name": "External providers: worker",
-  "version": "0.2",
+  "version": "0.3",
   "depends_on": [
     "worker_core",
     "indexer_worker"
