@@ -332,16 +332,20 @@ class Toolkit:  # pylint: disable=R0902,R0903
                 "openai_api_base": "api_base",
                 "openai_organization": "organization",
                 "model_kwargs": "model_kwargs",
+                # Session-auth runtimes carry the user's session cookie here
+                # (api_key is only a placeholder); plugins need it to reach
+                # the platform API, same as for Anthropic.
+                "default_headers": "default_headers",
             }
             secret_fields = {"openai_api_key"}
-            dict_fields = {"model_kwargs"}
+            dict_fields = {"model_kwargs", "default_headers"}
 
         # Extract fields using unified logic
         for attr_name, output_name in field_mapping.items():
             value = self._extract_llm_field(llm, attr_name, secret_fields, dict_fields)
             if value is None:
                 continue
-            # Skip empty dicts for model_kwargs
+            # Skip empty dicts (model_kwargs, default_headers)
             if attr_name in dict_fields and not value:
                 continue
             data[output_name] = value
