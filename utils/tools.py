@@ -299,6 +299,11 @@ class Toolkit:  # pylint: disable=R0902,R0903
         if llm is None:
             return None
 
+        # Auto binds a concrete model per call and carries no transport fields itself;
+        # the platform LLM endpoint comes from its owning client.
+        if getattr(llm, "_llm_type", None) == "elitea-auto":
+            return self._auto_llm_settings(getattr(llm, "owner", None) or self.elitea)
+
         # Detect provider type based on class name
         llm_class_name = type(llm).__name__
         is_anthropic = llm_class_name == "ChatAnthropic" or "anthropic" in llm_class_name.lower()
@@ -370,6 +375,26 @@ class Toolkit:  # pylint: disable=R0902,R0903
                 pass
 
         return data or None
+
+    def _auto_llm_settings(self, client):
+        """llm_settings for an Auto model: the platform's OpenAI-compatible endpoint."""
+        if client is None or not getattr(client, "base_url", None):
+            return None
+        data = {
+            "provider": "openai",
+            "api_base": f"{client.base_url}{getattr(client, 'llm_path', '/llm/v1')}",
+            "api_key": getattr(client, "_llm_api_key", None) or getattr(client, "auth_token", None),
+            "organization": str(client.project_id),
+            "project_id": client.project_id,
+        }
+        headers = {**(getattr(client, "api_extra_headers", None) or {}),
+                   **(getattr(client, "_llm_cookie_headers", None) or {})}
+        if headers:
+            data["default_headers"] = self._json_safe(headers)
+        model_image_generation = getattr(self.elitea, "model_image_generation", None)
+        if model_image_generation:
+            data["model_image_generation"] = model_image_generation
+        return data
 
     def _get_required_context(self):
         """Get context fields to pass based on toolkit's required_context declaration.
