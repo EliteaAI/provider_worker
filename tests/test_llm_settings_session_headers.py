@@ -75,3 +75,27 @@ def test_anthropic_settings_still_keep_headers(provider_tools):
 
     assert settings["default_headers"]["Cookie"] == "elitea_session=abc"
     assert settings["organization"] == "96"
+
+
+class AutoChatModel:
+    _llm_type = "elitea-auto"
+
+    def __init__(self, owner):
+        self.owner = owner
+
+
+def test_auto_model_settings_come_from_the_platform_client(provider_tools):
+    owner = types.SimpleNamespace(
+        base_url="http://main:8080", llm_path="/llm/v1", project_id=96, auth_token=None,
+        _llm_api_key="session", _llm_cookie_headers={"Cookie": "elitea_session=abc"},
+        api_extra_headers=None)
+    toolkit = provider_tools.Toolkit.__new__(provider_tools.Toolkit)
+    toolkit.llm = AutoChatModel(owner)
+    toolkit.elitea = types.SimpleNamespace(project_id=96, model_image_generation="gpt-image-1")
+    settings = toolkit._extract_llm_settings()
+
+    assert settings["api_base"] == "http://main:8080/llm/v1"
+    assert settings["api_key"] == "session"
+    assert settings["default_headers"] == {"Cookie": "elitea_session=abc"}
+    assert settings["organization"] == "96" and settings["project_id"] == 96
+    assert settings["model_image_generation"] == "gpt-image-1"
